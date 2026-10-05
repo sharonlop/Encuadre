@@ -1,0 +1,191 @@
+// Pre-paint FOUC guard: this script is loaded in <head> synchronously, so it
+// runs before <body> parses. We can't touch document.body yet, but we can put
+// the class on <html>; CSS uses `.siteNav-off` (ancestor) so #siteNav, main,
+// togglers etc. are styled before they ever paint expanded. sessionStorage is
+// canonical; ?nav=false is honored only on the very first visit.
+(function () {
+    try {
+        var s = sessionStorage.getItem('siteNav-off');
+        var off = s === '1' || (s === null && new URLSearchParams(window.location.search).get('nav') === 'false');
+        if (off) document.documentElement.classList.add('siteNav-off');
+    } catch (e) {}
+})();
+
+var myTheme = {
+    dropdownMenusWorking: false,
+    init: function () {
+        // Common functions
+        if (this.inIframe()) $('body').addClass('in-iframe');
+        if (!$('body').hasClass('exe-web-site')) return;
+        // Add menu and search bar togglers
+        var togglers =
+            '\
+            <button type="button" id="siteNavToggler" class="toggler" aria-expanded="true" aria-controls="siteNav" title="' +
+            $exe_i18n.menu +
+            '">\
+                <span class="sr-av">' +
+            $exe_i18n.menu +
+            '</span>\
+            </button>\
+        ';
+        // The search box is optional: only add its toggler when it exists
+        if ($('#exe-client-search').length) {
+            togglers +=
+                '\
+                <button type="button" id="searchBarToggler" class="toggler" aria-expanded="false" aria-controls="exe-client-search" title="' +
+                $exe_i18n.search +
+                '">\
+                    <span class="sr-av">' +
+                $exe_i18n.search +
+                '</span>\
+                </button>\
+            ';
+        }
+        $('#siteNav').before(togglers);
+        // The pre-paint guard above set .siteNav-off on <html>; mirror it onto
+        // <body> for selectors and jQuery checks that target body specifically.
+        // Then sync nav-button URLs and persist so sessionStorage is canonical.
+        var off = document.documentElement.classList.contains('siteNav-off');
+        if (off) {
+            $('body').addClass('siteNav-off');
+            myTheme.params('add');
+        }
+        myTheme.persistNavState(off);
+        myTheme.navExpanded(!off);
+        // Menu toggler
+        $('#siteNavToggler').on('click', function () {
+            if (myTheme.isLowRes()) {
+                $('#exe-client-search').hide();
+                $('#searchBarToggler').attr('aria-expanded', 'false');
+                if ($('body').hasClass('siteNav-off')) {
+                    myTheme.setNavOff(false);
+                } else if ($('#siteNav').isInViewport()) {
+                    myTheme.setNavOff(true);
+                    myTheme.params('add');
+                }
+                return;
+            }
+            var off = !$('body').hasClass('siteNav-off');
+            myTheme.setNavOff(off);
+            myTheme.params(off ? 'add' : 'remove');
+        });
+        // Search bar toggler — preserve sidebar state
+        $('#searchBarToggler').on('click', function () {
+            var bar = $('#exe-client-search');
+            if (bar.is(':visible')) {
+                bar.hide();
+                $(this).attr('aria-expanded', 'false');
+                return;
+            }
+            bar.show();
+            $(this).attr('aria-expanded', 'true');
+            $('#exe-client-search-text').focus();
+        });
+        // Collapsible submenus
+        this.dropdownMenus();
+        // Move the page title out of the fixed header into .page-content
+        // so long titles push the content card down naturally.
+        this.movePageTitle();
+    },
+    movePageTitle: function () {
+        var tryMove = function () {
+            var $title = $('.main-header .page-header .page-title').first();
+            if (!$title.length) return false;
+            var $target = $('.page-content').first();
+            if (!$target.length) $target = $('main.page').first();
+            if (!$target.length) return false;
+            $target.prepend($title);
+            return true;
+        };
+        if (tryMove()) return;
+        var observer = new MutationObserver(function () {
+            if (tryMove()) observer.disconnect();
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+    },
+    dropdownMenus: function () {
+        $('#siteNav ul ul').each(function (i) {
+            var elem = $(this);
+            this.id = 'child-section-' + i;
+            var lnk = elem.prev('a');
+            var css = elem.is(':visible') ? 'open-ul' : 'closed-ul';
+            lnk.append(
+                '<button type="button" id="child-section-' +
+                    i +
+                    '-toggler" title="' +
+                    $exe_i18n.more +
+                    '" class="' +
+                    css +
+                    '"><span class="sr-av">' +
+                    $exe_i18n.more +
+                    '</span></button>'
+            );
+            $('#child-section-' + i + '-toggler').on('click', function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                if (myTheme.dropdownMenusWorking) return;
+                myTheme.dropdownMenusWorking = true;
+                var btn = $(this);
+                var ul = $('#' + this.id.replace('-toggler', ''));
+                if (ul.is(':visible')) {
+                    ul.slideUp('fast', function () {
+                        btn.removeClass('open-ul').addClass('closed-ul');
+                        myTheme.dropdownMenusWorking = false;
+                    });
+                } else {
+                    ul.slideDown('fast', function () {
+                        btn.removeClass('closed-ul').addClass('open-ul');
+                        myTheme.dropdownMenusWorking = false;
+                    });
+                }
+            });
+        });
+    },
+    inIframe: function () {
+        try {
+            return window.self !== window.top;
+        } catch (e) {
+            return true;
+        }
+    },
+    isLowRes: function () {
+        return $('#siteNav').css('position') == 'static';
+    },
+    setNavOff: function (off) {
+        document.documentElement.classList.toggle('siteNav-off', off);
+        $('body').toggleClass('siteNav-off', off);
+        myTheme.persistNavState(off);
+        myTheme.navExpanded(!off);
+    },
+    persistNavState: function (off) {
+        try {
+            sessionStorage.setItem('siteNav-off', off ? '1' : '0');
+        } catch (e) {}
+    },
+    navExpanded: function (visible) {
+        $('#siteNavToggler').attr('aria-expanded', visible ? 'true' : 'false');
+        $('#siteNav').prop('inert', !visible);
+    },
+    // Toggle nav=false keeping the rest of the URL using a common function.
+    params: function (act) {
+        var value = act == 'add' ? 'false' : null;
+        $('.nav-buttons a').each(function () {
+            this.setAttribute(
+                'href',
+                $exeExport.setUrlParam(this.getAttribute('href'), 'nav', value)
+            );
+        });
+    }
+};
+
+$(function () {
+    myTheme.init();
+});
+
+$.fn.isInViewport = function () {
+    var elementTop = $(this).offset().top;
+    var elementBottom = elementTop + $(this).outerHeight();
+    var viewportTop = $(window).scrollTop();
+    var viewportBottom = viewportTop + $(window).height();
+    return elementBottom > viewportTop && elementTop < viewportBottom;
+};
